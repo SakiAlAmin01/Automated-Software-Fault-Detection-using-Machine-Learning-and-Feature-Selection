@@ -1,0 +1,83 @@
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import classification_report, confusion_matrix
+from scipy.io import arff
+import pandas as pd
+import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.exceptions import UndefinedMetricWarning
+from mlxtend.feature_selection import SequentialFeatureSelector
+from xgboost import XGBClassifier
+
+# List of ARFF files
+arff_files = ['CM1.arff', 'JM1.arff', 'KC1.arff', 'MC1.arff', 'MW1.arff', 'PC1.arff', 'PC2.arff', 'PC3.arff', 'PC4.arff', 'PC5.arff']
+
+# Suppress warnings
+warnings.simplefilter("ignore", category=UndefinedMetricWarning)
+
+for arff_file in arff_files:
+    # Load ARFF files
+    data, meta = arff.loadarff(arff_file)
+    df = pd.DataFrame(data)
+
+    # Identify the target column (assuming it is the last column)
+    target_column = df.columns[-1]
+
+    # Check if the dataset has enough samples
+    if df.shape[0] < 2:
+        print(f"Skipping {arff_file} due to insufficient samples.")
+        continue
+
+    # Check if the target column contains non-numeric values
+    if not pd.api.types.is_numeric_dtype(df[target_column]):
+        # Encode non-numeric labels
+        label_encoder = LabelEncoder()
+        df[target_column] = label_encoder.fit_transform(df[target_column])
+
+    # Extract features and labels
+    X = df.drop(columns=target_column).values
+    y = df[target_column].astype(int).values
+
+    # Split the data into training and testing sets
+    if df.shape[0] > 2:  # Check if there are enough samples for splitting
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Standardize features
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        # Feature selection using SequentialFeatureSelector
+        k_best = 20  # Set the number of features you want to select
+        sfs = SequentialFeatureSelector(XGBClassifier(), k_features=k_best, forward=True, scoring='f1_weighted', cv=5)
+        sfs.fit(X_train, y_train)
+        X_train_selected = sfs.transform(X_train)
+        X_test_selected = sfs.transform(X_test)
+
+        # Get the selected feature indices
+        selected_feature_indices = list(sfs.k_feature_idx_)
+        print("Selected feature indices:", selected_feature_indices)
+
+        # Extract the selected features from the original DataFrame
+        selected_features_df = df.iloc[:, selected_feature_indices]
+
+        # Define the ARFF header with attributes and data name
+        arff_header = '''@relation SelectedFeatures
+'''
+
+        # Add attributes to the ARFF header based on selected features
+        for column in selected_features_df.columns:
+            arff_header += f"@attribute {column} numeric\n"
+
+        # Add label attribute
+        arff_header += '@attribute label {Y,N}\n\n@data\n'
+
+        # Convert the DataFrame to ARFF format
+        arff_data = arff_header + selected_features_df.to_csv(index=False, header=False)
+
+        # Write ARFF data to a file
+        with open(f'selected_features_{arff_file}', 'w') as arff_file_selected:
+            arff_file_selected.write(arff_data)
+
+print("Selected features exported to ARFF format successfully.")

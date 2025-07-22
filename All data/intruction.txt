@@ -1,0 +1,7 @@
+1. sob data gula dekhen 
+2. Data gula k sob full value te convert koren like decimal value 
+3. die sob gulai dekhen 10 ta Dataset ache 
+4. sob gular jonno table plus graph banan
+5. 3 tarjonno 3 ta graph 
+6. sob value lagbe and kontai kon classifier valo kaj korche seta dekhano lagbe 
+7. graph apnara select koren koren kontaikorle besi details a bujha jabe 

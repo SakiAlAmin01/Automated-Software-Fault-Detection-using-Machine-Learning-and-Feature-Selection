@@ -1,0 +1,487 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from functools import partial
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.ensemble import VotingClassifier, RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.feature_selection import SelectKBest, f_classif, RFE, SelectFromModel
+from sklearn.metrics import classification_report, confusion_matrix
+from scipy.io import arff
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from xgboost import XGBClassifier
+from sklearn.neural_network import MLPClassifier
+from mlxtend.feature_selection import SequentialFeatureSelector
+from sklearn.pipeline import make_pipeline
+import matplotlib.pyplot as plt
+import os
+import seaborn as sns
+from threading import Thread
+
+dataset_entries = []
+browse_buttons = []
+previous_datasets = []
+
+def save_graph_as_png(data, filename, graph_type):
+    plt.figure(figsize=(8, 6))
+
+    if graph_type == "Confusion Matrix":
+        sns.heatmap(data, annot=True, fmt='d', cmap='Blues', cbar=False)
+        plt.title("Confusion Matrix")
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+    elif graph_type == "Accuracy":
+        plt.plot(data)
+        plt.title("Accuracy Graph")
+        plt.xlabel('Model')
+        plt.ylabel('Accuracy')
+
+    plt.savefig(filename)
+    plt.close()
+
+
+def plot_confusion_matrices_to_png(results_df, result_filename_prefix):
+    for i, dataset in enumerate(results_df['Dataset'].unique()):
+        plt.figure(figsize=(8, 6))
+        dataset_results = results_df[results_df['Dataset'] == dataset]
+        num_models = len(dataset_results)
+        num_cols = min(2, num_models)  # Maximum 2 columns for subplots
+        num_rows = (num_models // num_cols) + (num_models % num_cols > 0)
+
+        for j, model in enumerate(dataset_results['Model']):
+            plt.subplot(num_rows, num_cols, j + 1)
+            confusion_matrix_data = dataset_results.iloc[j]['Confusion Matrix']
+            sns.heatmap(confusion_matrix_data, annot=True, fmt='d', cmap='Blues', cbar=False)
+            plt.title(model)
+            plt.xlabel('Predicted')
+            plt.ylabel('True')
+
+        plt.suptitle(f'Confusion Matrix for Dataset: {dataset}')
+        plt.tight_layout()
+        plt.savefig(f"{result_filename_prefix}_{dataset}_confusion_matrix.png")
+        plt.close()
+
+def run_experiment(dataset_path, feature_selection_method, ml_methods, result_filename):
+    # Load ARFF files
+    data, meta = arff.loadarff(dataset_path)
+    df = pd.DataFrame(data)
+
+    # Initialize an empty DataFrame to store results including confusion matrix values
+    results_data = {'Dataset': [], 'Model': [], 'Precision': [], 'Recall': [], 'F1-Score': [], 'Accuracy': [],
+                    'Confusion Matrix': []}
+
+    # Identify the target column (assuming it is the last column)
+    target_column = df.columns[-1]
+
+    # Check if the target column contains non-numeric values
+    if not pd.api.types.is_numeric_dtype(df[target_column]):
+        # Encode non-numeric labels
+        label_encoder = LabelEncoder()
+        df[target_column] = label_encoder.fit_transform(df[target_column])
+
+    # Extract features and labels
+    X = df.drop(columns=target_column).values
+    y = df[target_column].astype(int).values
+
+    # Split the data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Standardize features
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    # Perform feature selection if specified
+    if feature_selection_method != 'Without feature selection':
+        if feature_selection_method == 'SelectKBest':
+            selector = SelectKBest(f_classif, k=20)  # Set the number of features you want to select
+        elif feature_selection_method == 'RFA':
+            rfa_model = RandomForestClassifier(n_estimators=100, random_state=42)
+            selector = RFE(rfa_model, n_features_to_select=20)
+        elif feature_selection_method == 'Lasso':
+            lasso_model = LogisticRegression(penalty='l1', solver='liblinear')
+            selector = SelectFromModel(lasso_model)
+        elif feature_selection_method == 'GFS':
+            k_best = 20  # Set the number of features you want to select
+            sfs = SequentialFeatureSelector(make_pipeline(StandardScaler(), XGBClassifier()), k_features=k_best,
+                                            forward=True, scoring='f1_weighted', cv=5)
+            selector = sfs
+
+        X_train = selector.fit_transform(X_train, y_train)
+        X_test = selector.transform(X_test)
+
+    # Run the selected ML methods
+    for ml_method in ml_methods:
+        if ml_method == 'XGBoost with SVM (Tuned)':
+            # XGBoost with SVM (Support Vector Machines)
+            xgb_svm_param_grid = {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.2]}
+            xgb_svm_model = XGBClassifier()
+            xgb_svm_grid_search = GridSearchCV(xgb_svm_model, xgb_svm_param_grid, cv=5, scoring='f1_weighted')
+            xgb_svm_grid_search.fit(X_train, y_train)
+            best_xgb_svm_model = xgb_svm_grid_search.best_estimator_
+            best_xgb_svm_model.fit(X_train, y_train)
+            y_pred_xgb_svm = best_xgb_svm_model.predict(X_test)
+            xgb_svm_report = classification_report(y_test, y_pred_xgb_svm, zero_division=1, output_dict=True)
+            confusion_mat_xgb_svm = confusion_matrix(y_test, y_pred_xgb_svm)
+            results_data['Dataset'].append(dataset_path)
+            results_data['Model'].append(ml_method)
+            results_data['Precision'].append(xgb_svm_report['weighted avg']['precision'])
+            results_data['Recall'].append(xgb_svm_report['weighted avg']['recall'])
+            results_data['F1-Score'].append(xgb_svm_report['weighted avg']['f1-score'])
+            results_data['Accuracy'].append(xgb_svm_report['weighted avg']['f1-score'])
+            results_data['Confusion Matrix'].append(confusion_mat_xgb_svm.tolist())
+
+            # Save confusion matrix graph as PNG
+            save_graph_as_png(confusion_mat_xgb_svm,
+                              f"{os.path.splitext(os.path.basename(dataset_path))[0]}_xgb_svm.png", "Confusion Matrix")
+
+        if ml_method == 'XGBoost with Naive Bayes':
+            # XGBoost with Naive Bayes
+            xgb_nb_param_grid = {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.2]}
+            xgb_nb_model = XGBClassifier()
+            xgb_nb_grid_search = GridSearchCV(xgb_nb_model, xgb_nb_param_grid, cv=5, scoring='f1_weighted')
+            xgb_nb_grid_search.fit(X_train, y_train)
+            best_xgb_nb_model = xgb_nb_grid_search.best_estimator_
+            best_xgb_nb_model.fit(X_train, y_train)
+            y_pred_xgb_nb = best_xgb_nb_model.predict(X_test)
+            xgb_nb_report = classification_report(y_test, y_pred_xgb_nb, zero_division=1, output_dict=True)
+            confusion_mat_xgb_nb = confusion_matrix(y_test, y_pred_xgb_nb)
+            results_data['Dataset'].append(dataset_path)
+            results_data['Model'].append(ml_method)
+            results_data['Precision'].append(xgb_nb_report['weighted avg']['precision'])
+            results_data['Recall'].append(xgb_nb_report['weighted avg']['recall'])
+            results_data['F1-Score'].append(xgb_nb_report['weighted avg']['f1-score'])
+            results_data['Accuracy'].append(xgb_nb_report['weighted avg']['f1-score'])
+            results_data['Confusion Matrix'].append(confusion_mat_xgb_nb.tolist())
+
+            # Save confusion matrix graph as PNG
+            save_graph_as_png(confusion_mat_xgb_nb, f"{os.path.splitext(os.path.basename(dataset_path))[0]}_xgb_nb.png", "Confusion Matrix")
+
+        elif ml_method == 'XGBoost with Random Forests (Tuned)':
+            # XGBoost with Random Forests (Tuned)
+            xgb_rf_param_grid = {'n_estimators': [50, 100, 200], 'max_depth': [None, 10, 20]}
+            xgb_rf_model = XGBClassifier()
+            xgb_rf_grid_search = GridSearchCV(xgb_rf_model, xgb_rf_param_grid, cv=5, scoring='f1_weighted')
+            xgb_rf_grid_search.fit(X_train, y_train)
+            best_xgb_rf_model = xgb_rf_grid_search.best_estimator_
+            best_xgb_rf_model.fit(X_train, y_train)
+            y_pred_xgb_rf = best_xgb_rf_model.predict(X_test)
+            xgb_rf_report = classification_report(y_test, y_pred_xgb_rf, zero_division=1, output_dict=True)
+            confusion_mat_xgb_rf = confusion_matrix(y_test, y_pred_xgb_rf)
+            results_data['Dataset'].append(dataset_path)
+            results_data['Model'].append(ml_method)
+            results_data['Precision'].append(xgb_rf_report['weighted avg']['precision'])
+            results_data['Recall'].append(xgb_rf_report['weighted avg']['recall'])
+            results_data['F1-Score'].append(xgb_rf_report['weighted avg']['f1-score'])
+            results_data['Accuracy'].append(xgb_rf_report['weighted avg']['f1-score'])
+            results_data['Confusion Matrix'].append(confusion_mat_xgb_rf.tolist())
+
+            # Save confusion matrix graph as PNG
+            save_graph_as_png(confusion_mat_xgb_rf, f"{os.path.splitext(os.path.basename(dataset_path))[0]}_xgb_rf.png", "Confusion Matrix")
+
+        elif ml_method == 'XGBoost + ANN':
+            # Artificial Neural Network (ANN) with XGBoost
+            ann_xgb_param_grid = {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.2]}
+            ann_xgb_model = XGBClassifier()
+            ann_xgb_grid_search = GridSearchCV(ann_xgb_model, ann_xgb_param_grid, cv=5, scoring='f1_weighted')
+            ann_xgb_grid_search.fit(X_train, y_train)
+            best_ann_xgb_model = ann_xgb_grid_search.best_estimator_
+
+            # Neural Network (Multi-layer Perceptron) as part of the ensemble
+            ann_model = MLPClassifier(hidden_layer_sizes=(100,), max_iter=2000, random_state=42)
+            ann_model.fit(X_train, y_train)
+
+            # Combine XGBoost and Neural Network using a voting classifier
+            combined_model = VotingClassifier(estimators=[
+                ('xgb', best_ann_xgb_model),
+                ('ann', ann_model)
+            ], voting='soft')  # Soft voting for probabilities
+
+            combined_model.fit(X_train, y_train)
+            y_pred_combined = combined_model.predict(X_test)
+
+            combined_report = classification_report(y_test, y_pred_combined, zero_division=1, output_dict=True)
+            confusion_mat_combined = confusion_matrix(y_test, y_pred_combined)
+
+            results_data['Dataset'].append(dataset_path)
+            results_data['Model'].append(ml_method)
+            results_data['Precision'].append(combined_report['weighted avg']['precision'])
+            results_data['Recall'].append(combined_report['weighted avg']['recall'])
+            results_data['F1-Score'].append(combined_report['weighted avg']['f1-score'])
+            results_data['Accuracy'].append(combined_report['weighted avg']['f1-score'])
+            results_data['Confusion Matrix'].append(confusion_mat_combined.tolist())
+
+            # Save confusion matrix graph as PNG
+            save_graph_as_png(confusion_mat_combined,
+                              f"{os.path.splitext(os.path.basename(dataset_path))[0]}_xgb_ann.png", "Confusion Matrix")
+
+    results_df = pd.DataFrame(results_data)
+    results_df.to_excel(result_filename, index=False)  # Save results to the specified filename
+
+    # Generate and save the accuracy graph
+    save_accuracy_graph(results_df, result_filename)
+
+    return results_df
+
+def save_accuracy_graph(results_df, result_filename):
+    plt.figure(figsize=(12, 6))
+    sns.barplot(x='Model', y='Accuracy', hue='Dataset', data=results_df, palette='viridis')
+    plt.title('Accuracy for Each Model')
+    plt.xticks(rotation=45)  # Rotate x-axis labels for better readability
+    plt.tight_layout()  # Adjust layout to prevent label overlap
+    plt.savefig(f"{os.path.splitext(result_filename)[0]}_accuracy_graph.png")
+    plt.close()
+
+def browse_file(entry):
+    file_path = filedialog.askopenfilename()
+    if file_path:
+        entry.delete(0, tk.END)
+        entry.insert(0, file_path)
+        # Add the selected dataset to the list of previous datasets
+        if file_path not in previous_datasets:
+            previous_datasets.append(file_path)
+
+def start_experiment(dataset_entries, feature_selection_method, ml_methods, result_filename_entry, graph_selection):
+    add_xlsx_extension(result_filename_entry)
+    dataset_paths = [entry.get().strip('"') for entry in dataset_entries if entry.get()]
+    if not dataset_paths:
+        messagebox.showerror("Error", "Please provide at least one dataset.")
+        return
+
+    result_filename = result_filename_entry.get()
+    if not result_filename:
+        messagebox.showerror("Error", "Please provide a result filename.")
+        return
+
+    try:
+        results_dfs = []  # Initialize a list to store results DataFrames for each dataset
+        for dataset_path in dataset_paths:
+            try:
+                results_df = run_experiment(dataset_path, feature_selection_method.get(), ml_methods, result_filename)
+                results_dfs.append(results_df)  # Store results DataFrame for this dataset
+            except Exception as e:
+                print(f"Error processing dataset {dataset_path}: {str(e)}")
+
+        if results_dfs:  # If there are valid results DataFrames
+            # Concatenate all results DataFrames into a single DataFrame
+            combined_results_df = pd.concat(results_dfs, ignore_index=True)
+
+            # Save the combined results DataFrame to the specified Excel filename
+            combined_results_df.to_excel(result_filename, index=False)
+
+            # Check if Accuracy graph is selected
+            if graph_selection[0].get():
+                save_accuracy_graph(combined_results_df, result_filename)
+                messagebox.showinfo("Experiment Completed", "Accuracy graph successfully generated.")
+            elif graph_selection[1].get():  # Check if Confusion Matrix graph is selected
+                # Plot confusion matrices for each dataset
+                for results_df in results_dfs:
+                    plot_confusion_matrices_to_png(results_df, os.path.splitext(result_filename)[0])
+                messagebox.showinfo("Experiment Completed", "Confusion matrix graphs successfully generated.")
+            else:
+                messagebox.showinfo("Experiment Completed", "Experiment completed, no graph selected.")
+        else:
+            print("No valid results.")
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred during the experiment: {str(e)}")
+
+def browse_file(entry):
+    file_path = filedialog.askopenfilename()
+    if file_path:
+        entry.delete(0, tk.END)
+        entry.insert(0, file_path)
+        # Add the selected dataset to the list of previous datasets
+        if file_path not in previous_datasets:
+            previous_datasets.append(file_path)
+# Function to add a new dataset entry
+def add_dataset_entry(add_button, clear_button):
+    new_entry = tk.Entry(dataset_frame, width=50)
+    new_entry.grid(row=len(dataset_entries) + 1, column=0, pady=5, sticky="ew")
+    dataset_entries.append(new_entry)
+
+    # Check if there are previous datasets to recommend
+    if previous_datasets:
+        # Create a menu to recommend previously selected datasets
+        previous_datasets_menu = tk.Menu(new_entry, tearoff=0)
+        for dataset_path in previous_datasets:
+            previous_datasets_menu.add_command(label=os.path.basename(dataset_path),
+                                               command=lambda path=dataset_path: new_entry.insert(0, path))
+
+        # Attach the menu to the dataset entry box
+        new_entry.bind("<Button-3>", lambda event: previous_datasets_menu.post(event.x_root, event.y_root))
+
+    # Create a Browse File button for this entry
+    browse_button = tk.Button(dataset_frame, text="Browse File",
+                              command=lambda entry=new_entry: browse_file(entry))
+    browse_button.grid(row=len(dataset_entries), column=1, padx=(10, 0), pady=5, sticky="ew")
+    browse_buttons.append((new_entry, browse_button))  # Store both the entry and button together
+
+    add_button.grid(row=len(dataset_entries) + 2, column=0, pady=5, sticky="ew")
+    clear_button.grid(row=len(dataset_entries) + 3, column=0, pady=5, sticky="ew")
+
+def browse_file(entry):
+    file_path = filedialog.askopenfilename()
+    if file_path:
+        entry.delete(0, tk.END)
+        entry.insert(0, file_path)
+
+def clear_dataset_entries(add_button, clear_button):
+    global dataset_entries, browse_buttons
+
+    # Remove dataset entries from the grid and destroy them
+    for entry in dataset_entries:
+        entry.grid_forget()
+        entry.destroy()
+
+    # Remove associated browse buttons from the grid and destroy them
+    for entry, button in browse_buttons:
+        entry.grid_forget()
+        entry.destroy()
+        button.grid_forget()
+        button.destroy()
+
+    # Clear the lists of dataset entries and browse buttons
+    dataset_entries.clear()
+    browse_buttons.clear()
+
+    # Reset the position of the "Add Dataset" and "Clear Datasets" buttons
+    add_button.grid(row=1, column=0, pady=5, sticky="ew")
+    clear_button.grid(row=2, column=0, pady=5, sticky="ew")
+
+def add_xlsx_extension(entry):
+    filename = entry.get().strip()
+    if filename and not filename.endswith(".xlsx"):
+        filename += ".xlsx"
+        entry.delete(0, tk.END)
+        entry.insert(0, filename)
+def make_bold_and_center(widget):
+    for child in widget.winfo_children():
+        child.grid_configure(padx=10)
+
+def start_experiment_threaded(dataset_entries, feature_selection_method, ml_methods, result_filename_entry, graph_selection):
+    t = Thread(target=start_experiment, args=(dataset_entries, feature_selection_method, ml_methods, result_filename_entry, graph_selection))
+    t.start()
+
+def main():
+    root = tk.Tk()
+    root.title("Software Fault Detection Tool")
+    global dataset_frame, dataset_entries, add_dataset_button, clear_dataset_button
+    logo_image = tk.PhotoImage(file="logo.png")  # Change "logo.png" to the path of your logo image
+
+    # Resize logo image
+    logo_image_resized = logo_image.subsample(2, 2)  # Adjust the subsample values as needed to resize the image
+    logo_label = tk.Label(root, image=logo_image_resized)
+    logo_label.grid(row=0, column=0, columnspan=2, pady=(10, 0), sticky="ew")
+
+    # Create a frame for the entire content
+    content_frame = tk.Frame(root)
+    content_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+
+    # Add a canvas to support scrolling
+    canvas = tk.Canvas(content_frame)
+    canvas.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+    # Add a scrollbar to the canvas
+    scrollbar = tk.Scrollbar(content_frame, orient="vertical", command=canvas.yview)
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    # Create a frame to contain all the elements
+    inner_frame = tk.Frame(canvas)
+    canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+
+    # Function to adjust the scrolling region when the inner frame changes size
+    def on_frame_configure(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    inner_frame.bind("<Configure>", on_frame_configure)
+
+    dataset_frame = tk.Frame(inner_frame)
+    dataset_frame.grid(row=0, column=150, columnspan=10, padx=1, pady=1, sticky="ew")  # Set columnspan to 10
+    inner_frame.columnconfigure(0, weight=1)  # Allow inner frame to expand horizontally
+    dataset_frame.columnconfigure(0, weight=1)  # Allow dataset frame to expand horizontally
+
+    dataset_entries = []
+    for _ in range(2):  # Create two dataset entry boxes by default
+        new_entry = tk.Entry(dataset_frame, width=50)
+        new_entry.grid(row=len(dataset_entries) + 1, column=0, pady=5, sticky="ew")  # Adjust row placement
+        dataset_entries.append(new_entry)
+
+        # Create a Browse File button for this entry
+        browse_button = tk.Button(dataset_frame, text="Browse File",
+                                  command=lambda entry=new_entry: browse_file(entry))
+        browse_button.grid(row=len(dataset_entries), column=1, padx=(10, 0), pady=5, sticky="ew")
+        browse_buttons.append((new_entry, browse_button))  # Store both the entry and button together
+
+    add_dataset_button = tk.Button(dataset_frame, text="Add Dataset",
+                                   command=lambda: add_dataset_entry(add_dataset_button, clear_dataset_button))
+    add_dataset_button.grid(row=len(dataset_entries) + 2, column=0, pady=5, sticky="ew")
+
+    clear_dataset_button = tk.Button(dataset_frame, text="Clear Datasets",
+                                     command=lambda: clear_dataset_entries(add_dataset_button, clear_dataset_button))
+    clear_dataset_button.grid(row=len(dataset_entries) + 3, column=0, pady=5, sticky="ew")
+
+    feature_selection_method = tk.StringVar(root)
+    feature_selection_method.set("Select Any Feature")
+
+    feature_selection_label = tk.Label(root, text="Feature Selection Method:")
+    feature_selection_label.grid(row=2, column=0, padx=(10, 3), pady=5, sticky="w")  # Adjusted padx
+    make_bold_and_center(feature_selection_label)
+
+    feature_selection_menu = tk.OptionMenu(root, feature_selection_method, "Without feature selection", "SelectKBest",
+                                           "RFE", "Lasso", "GFS")
+    feature_selection_menu.grid(row=2, column=0, padx=(180, 10), pady=5, sticky="ew")  # Adjusted padx
+
+    ml_methods = ["XGBoost with SVM (Tuned)", "XGBoost with Naive Bayes", "XGBoost with Random Forests (Tuned)",
+                  "XGBoost + ANN"]
+
+    ml_methods_label = tk.Label(root, text="Machine Learning Methods:")
+    ml_methods_label.grid(row=3, column=0, padx=(10, 3), pady=5, sticky="w")
+    make_bold_and_center(ml_methods_label)
+
+    ml_methods_frame = tk.Frame(root)
+    ml_methods_frame.grid(row=3, column=0, padx=(180, 10), pady=5, sticky="w")
+
+    ml_method_vars = [tk.BooleanVar() for _ in ml_methods]
+    ml_method_checkboxes = [tk.Checkbutton(ml_methods_frame, text=ml_methods[i], variable=ml_method_vars[i]) for i in
+                            range(len(ml_methods))]
+    for i, checkbox in enumerate(ml_method_checkboxes):
+        checkbox.grid(row=i, column=0, sticky="w")
+
+    graph_selection_label = tk.Label(root, text="Graphs to Generate:")
+    graph_selection_label.grid(row=4, column=0, padx=(10, 3), pady=5, sticky="w")
+    make_bold_and_center(graph_selection_label)
+
+    graph_selection_vars = [tk.BooleanVar() for _ in range(2)]  # For Accuracy and Confusion Matrix
+
+    graph_selection_checkboxes = []
+    for i, graph_option in enumerate(["Accuracy", "Confusion Matrix"]):
+        checkbox = tk.Checkbutton(root, text=graph_option, variable=graph_selection_vars[i])
+        checkbox.grid(row=4 + i, column=0, padx=(180, 20), pady=5, sticky="w")
+        graph_selection_checkboxes.append(checkbox)
+
+    result_filename_label = tk.Label(root, text="Enter Excel Filename:")
+    result_filename_label.grid(row=7, column=0, padx=(10, 3), pady=5, sticky="w")
+    make_bold_and_center(result_filename_label)
+
+    result_filename_entry = tk.Entry(root)
+    result_filename_entry.grid(row=7, column=0, padx=(180, 10), pady=5, sticky="ew")
+
+    # Automatically add .xlsx extension to the filename if not present
+    result_filename_entry.bind("<FocusOut>", lambda event: add_xlsx_extension(result_filename_entry))
+
+    start_button = tk.Button(root, text="Start Experiment",
+                             command=partial(start_experiment_threaded, dataset_entries, feature_selection_method,
+                                             ml_methods,
+                                             result_filename_entry, graph_selection_vars))
+    start_button.grid(row=8, columnspan=2, pady=10)
+
+    # Configure resizing behavior
+    root.rowconfigure(1, weight=1)
+    root.columnconfigure(0, weight=1)
+    content_frame.rowconfigure(0, weight=1)
+    content_frame.columnconfigure(0, weight=1)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

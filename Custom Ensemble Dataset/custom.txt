@@ -1,0 +1,192 @@
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.ensemble import VotingClassifier
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import classification_report, confusion_matrix
+from scipy.io import arff
+import pandas as pd
+import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.neural_network import MLPClassifier
+from sklearn.exceptions import UndefinedMetricWarning
+import plotly.graph_objects as go
+from xgboost import XGBClassifier
+
+# List of ARFF files
+arff_files = ['CustomCM1.arff', 'CustomJM1.arff', 'CustomKC1.arff', 'CustomMC1.arff', 'CustomMW1.arff', 'CustomPC1.arff', 'CustomPC2.arff', 'CustomPC3.arff', 'CustomPC4.arff', 'CustomPC5.arff']
+
+# Suppress warnings
+warnings.simplefilter("ignore", category=UndefinedMetricWarning)
+
+# Initialize an empty DataFrame to store results including confusion matrix values
+results_data = {'Dataset': [], 'Model': [], 'Precision': [], 'Recall': [], 'F1-Score': [], 'Accuracy': [], 'Confusion Matrix': []}
+
+# Initialize dictionaries to store testing validation results for each model
+testing_val_results = {'XGBoost with SVM (Tuned)': [], 'XGBoost with Naive Bayes': [], 'XGBoost with Random Forests (Tuned)': [], 'XGBoost + ANN': []}
+
+for arff_file in arff_files:
+    # Load ARFF files
+    data, meta = arff.loadarff(arff_file)
+    df = pd.DataFrame(data)
+
+    # Identify the target column (assuming it is the last column)
+    target_column = df.columns[-1]
+
+    # Check if the dataset has enough samples
+    if df.shape[0] < 2:
+        print(f"Skipping {arff_file} due to insufficient samples.")
+        continue
+
+    # Check if the target column contains non-numeric values
+    if not pd.api.types.is_numeric_dtype(df[target_column]):
+        # Encode non-numeric labels
+        label_encoder = LabelEncoder()
+        df[target_column] = label_encoder.fit_transform(df[target_column])
+
+    # Extract features and labels
+    X = df.drop(columns=target_column).values
+    y = df[target_column].astype(int).values
+
+    # Split the data into training and testing sets
+    if df.shape[0] > 2:  # Check if there are enough samples for splitting
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Standardize features
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        # XGBoost with SVM (Support Vector Machines)
+        xgb_svm_param_grid = {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.2]}
+        xgb_svm_model = XGBClassifier()
+        xgb_svm_grid_search = GridSearchCV(xgb_svm_model, xgb_svm_param_grid, cv=5, scoring='f1_weighted')
+        xgb_svm_grid_search.fit(X_train, y_train)
+        best_xgb_svm_model = xgb_svm_grid_search.best_estimator_
+        best_xgb_svm_model.fit(X_train, y_train)
+        y_pred_xgb_svm = best_xgb_svm_model.predict(X_test)
+        xgb_svm_report = classification_report(y_test, y_pred_xgb_svm, zero_division=1, output_dict=True)
+        confusion_mat_xgb_svm = confusion_matrix(y_test, y_pred_xgb_svm)
+        results_data['Dataset'].append(arff_file)
+        results_data['Model'].append('XGBoost with SVM (Tuned)')
+        results_data['Precision'].append(xgb_svm_report['weighted avg']['precision'])
+        results_data['Recall'].append(xgb_svm_report['weighted avg']['recall'])
+        results_data['F1-Score'].append(xgb_svm_report['weighted avg']['f1-score'])
+        results_data['Accuracy'].append(xgb_svm_report['weighted avg']['f1-score'])
+        results_data['Confusion Matrix'].append(confusion_mat_xgb_svm.tolist())
+
+        # Store testing validation results for XGBoost with SVM
+        testing_val_results['XGBoost with SVM (Tuned)'].append(xgb_svm_report['weighted avg']['f1-score'])
+
+        # XGBoost with Naive Bayes
+        xgb_nb_param_grid = {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.2]}
+        xgb_nb_model = XGBClassifier()
+        xgb_nb_grid_search = GridSearchCV(xgb_nb_model, xgb_nb_param_grid, cv=5, scoring='f1_weighted')
+        xgb_nb_grid_search.fit(X_train, y_train)
+        best_xgb_nb_model = xgb_nb_grid_search.best_estimator_
+        best_xgb_nb_model.fit(X_train, y_train)
+        y_pred_xgb_nb = best_xgb_nb_model.predict(X_test)
+        xgb_nb_report = classification_report(y_test, y_pred_xgb_nb, zero_division=1, output_dict=True)
+        confusion_mat_xgb_nb = confusion_matrix(y_test, y_pred_xgb_nb)
+        results_data['Dataset'].append(arff_file)
+        results_data['Model'].append('XGBoost with Naive Bayes')
+        results_data['Precision'].append(xgb_nb_report['weighted avg']['precision'])
+        results_data['Recall'].append(xgb_nb_report['weighted avg']['recall'])
+        results_data['F1-Score'].append(xgb_nb_report['weighted avg']['f1-score'])
+        results_data['Accuracy'].append(xgb_nb_report['weighted avg']['f1-score'])
+        results_data['Confusion Matrix'].append(confusion_mat_xgb_nb.tolist())
+
+        # Store testing validation results for XGBoost with Naive Bayes
+        testing_val_results['XGBoost with Naive Bayes'].append(xgb_nb_report['weighted avg']['f1-score'])
+
+        # XGBoost with Random Forests (Tuned)
+        xgb_rf_param_grid = {'n_estimators': [50, 100, 200], 'max_depth': [None, 10, 20]}
+        xgb_rf_model = XGBClassifier()
+        xgb_rf_grid_search = GridSearchCV(xgb_rf_model, xgb_rf_param_grid, cv=5, scoring='f1_weighted')
+        xgb_rf_grid_search.fit(X_train, y_train)
+        best_xgb_rf_model = xgb_rf_grid_search.best_estimator_
+        best_xgb_rf_model.fit(X_train, y_train)
+        y_pred_xgb_rf = best_xgb_rf_model.predict(X_test)
+        xgb_rf_report = classification_report(y_test, y_pred_xgb_rf, zero_division=1, output_dict=True)
+        confusion_mat_xgb_rf = confusion_matrix(y_test, y_pred_xgb_rf)
+        results_data['Dataset'].append(arff_file)
+        results_data['Model'].append('XGBoost with Random Forests (Tuned)')
+        results_data['Precision'].append(xgb_rf_report['weighted avg']['precision'])
+        results_data['Recall'].append(xgb_rf_report['weighted avg']['recall'])
+        results_data['F1-Score'].append(xgb_rf_report['weighted avg']['f1-score'])
+        results_data['Accuracy'].append(xgb_rf_report['weighted avg']['f1-score'])
+        results_data['Confusion Matrix'].append(confusion_mat_xgb_rf.tolist())
+
+        # Store testing validation results for XGBoost with Random Forests
+        testing_val_results['XGBoost with Random Forests (Tuned)'].append(xgb_rf_report['weighted avg']['f1-score'])
+
+        # Artificial Neural Network (ANN) with XGBoost
+        ann_xgb_param_grid = {'n_estimators': [50, 100, 200], 'learning_rate': [0.01, 0.1, 0.2]}
+        ann_xgb_model = XGBClassifier()
+        ann_xgb_grid_search = GridSearchCV(ann_xgb_model, ann_xgb_param_grid, cv=5, scoring='f1_weighted')
+        ann_xgb_grid_search.fit(X_train, y_train)
+        best_ann_xgb_model = ann_xgb_grid_search.best_estimator_
+
+        # Neural Network (Multi-layer Perceptron) as part of the ensemble
+        ann_model = MLPClassifier(hidden_layer_sizes=(100,), max_iter=2000, random_state=42)
+        ann_model.fit(X_train, y_train)
+
+        # Combine XGBoost and Neural Network using a voting classifier
+        combined_model = VotingClassifier(estimators=[
+            ('xgb', best_ann_xgb_model),
+            ('ann', ann_model)
+        ], voting='soft')  # Soft voting for probabilities
+
+        combined_model.fit(X_train, y_train)
+        y_pred_combined = combined_model.predict(X_test)
+
+        combined_report = classification_report(y_test, y_pred_combined, zero_division=1, output_dict=True)
+        confusion_mat_combined = confusion_matrix(y_test, y_pred_combined)
+
+        results_data['Dataset'].append(arff_file)
+        results_data['Model'].append('XGBoost + ANN')
+        results_data['Precision'].append(combined_report['weighted avg']['precision'])
+        results_data['Recall'].append(combined_report['weighted avg']['recall'])
+        results_data['F1-Score'].append(combined_report['weighted avg']['f1-score'])
+        results_data['Accuracy'].append(combined_report['weighted avg']['f1-score'])
+        results_data['Confusion Matrix'].append(confusion_mat_combined.tolist())
+
+        # Store testing validation results for XGBoost + ANN
+        testing_val_results['XGBoost + ANN'].append(combined_report['weighted avg']['f1-score'])
+
+# Create a DataFrame from the accumulated data
+results_df = pd.DataFrame(results_data)
+
+# Display the combined results
+print(results_df)
+
+# Create a bar plot for the F1-Score of each model
+plt.figure(figsize=(12, 6))
+sns.barplot(x='Model', y='F1-Score', hue='Dataset', data=results_df, palette='viridis')
+plt.title('F1-Score for Each Model')
+plt.show()
+
+# Testing Validation Graph for XGBoost with SVM, XGBoost with Naive Bayes, XGBoost with Random Forests, and XGBoost + ANN
+plt.figure(figsize=(12, 6))
+models = list(testing_val_results.keys())
+for model in models:
+    plt.plot(arff_files, testing_val_results[model], label=model)
+
+plt.xlabel('Dataset')
+plt.ylabel('F1-Score')
+plt.title('Testing Validation F1-Score for Different Models')
+plt.legend()
+plt.show()
+
+# Save the results to an Excel sheet
+results_df.to_excel('model_results_with_confusion_matrix_xgboost_without_feature.xlsx', index=False)
+
+# Create an interactive table with the results and confusion matrix using plotly
+fig = go.Figure(data=[go.Table(
+    header=dict(values=['Dataset', 'Model', 'Precision', 'Recall', 'F1-Score', 'Accuracy', 'Confusion Matrix']),
+    cells=dict(values=[results_df['Dataset'], results_df['Model'], results_df['Precision'], results_df['Recall'], results_df['F1-Score'], results_df['Accuracy'], results_df['Confusion Matrix']])
+)])
+
+fig.update_layout(title='Model Performance Table with Confusion Matrix')
+
+# Show the table as a pop-up
+fig.show(config={'displayModeBar': True, 'editable': True})

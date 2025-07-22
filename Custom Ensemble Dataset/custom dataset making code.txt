@@ -1,0 +1,84 @@
+import random
+import pandas as pd
+from scipy.io import arff
+
+# Load ARFF file
+arff_file = 'PC5.arff'
+data, meta = arff.loadarff(arff_file)
+df = pd.DataFrame(data)
+
+# Select random attributes (features) and data
+random.seed(42)  # Set seed for reproducibility
+selected_attributes = random.sample(df.columns.tolist(), k=10)  # Select 10 random attributes
+selected_data = df.sample(n=10000, random_state=42)  # Select 250 random rows of data
+
+# Create a new DataFrame with selected attributes and data
+custom_df = selected_data[selected_attributes].copy()  # Make a copy to avoid the SettingWithCopyWarning
+
+# Add the target column (Defective) to the custom DataFrame and remove the 'b' prefix
+custom_df['Defective'] = selected_data['Defective'].str.decode('utf-8')
+
+# Define the ARFF header with attributes and data name
+arff_header = '''@relation CustomCM1
+'''
+
+# Add attributes to the ARFF header based on selected features
+for column in custom_df.columns[:-1]:  # Exclude the target column
+    arff_header += f"@attribute {column} numeric\n"
+
+# Add target attribute (Defective)
+arff_header += '@attribute Defective {Y,N}\n\n@data\n'
+
+# Convert the DataFrame to ARFF format
+arff_data = arff_header + custom_df.to_csv(index=False, header=False)
+
+# Write ARFF data to a file
+with open('CustomPC5.arff', 'w') as arff_file_custom:
+    arff_file_custom.write(arff_data)
+
+print("Custom CM1 ARFF file created successfully.")
+
+
+
+__________________________________________________________________________
+
+import random
+import pandas as pd
+from scipy.io import arff
+
+# Load ARFF file
+arff_file = 'JM1.arff'  # Update the filename to JM1.arff
+data, meta = arff.loadarff(arff_file)
+df = pd.DataFrame(data)
+
+# Select random attributes (features) and data
+random.seed(42)  # Set seed for reproducibility
+selected_attributes = random.sample(df.columns.tolist(), k=10)  # Select 10 random attributes
+selected_data = df.sample(n=5500, random_state=42)  # Select 250 random rows of data
+
+# Create a new DataFrame with selected attributes and data
+custom_df = selected_data[selected_attributes].copy()  # Make a copy to avoid the SettingWithCopyWarning
+
+# Add the target column (label) to the custom DataFrame and remove the 'b' prefix
+custom_df['label'] = selected_data['label'].str.decode('utf-8')
+
+# Define the ARFF header with attributes and data name
+arff_header = '''@relation CustomJM1
+'''
+
+# Add attributes to the ARFF header based on selected features
+for column in custom_df.columns[:-1]:  # Exclude the target column
+    arff_header += f"@attribute {column} numeric\n"
+
+# Add target attribute (label)
+arff_header += '@attribute label {Y,N}\n\n@data\n'
+
+# Convert the DataFrame to ARFF format
+arff_data = arff_header + custom_df.to_csv(index=False, header=False)
+
+# Write ARFF data to a file
+with open('CustomJM1.arff', 'w') as arff_file_custom:
+    arff_file_custom.write(arff_data)
+
+print("Custom JM1 ARFF file created successfully.")
+
